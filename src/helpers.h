@@ -154,4 +154,33 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s,
   return {x,y};
 }
 
+static const int NO_OF_LANES = 3;
+static const int LANE_WIDTH = 4;
+
+/*
+ * @brief Identify the lane based on the given distance d.
+ *        assumption road has 3 lanes on each travelling direction
+ * @param d lane distance d
+ *
+ * @return d identified lane correspond to d on failure return -1
+ */
+int getLane(float d){
+  for(int i = 0; i < NO_OF_LANES; ++i){
+    if( d >= i * LANE_WIDTH && d < ( i + 1) * LANE_WIDTH ) {
+	  return i;
+	}		
+  }
+  return -1;
+}
+
+/**
+ * @brief each lane width is 4m so for 0th left most lane center distance is 2m
+ * @param laneNo 0 is left most lane 
+ *
+ * @return center lane distance for passed in lane
+ */
+int getLaneCenterDist(int laneNo){
+  return 2 + LANE_WIDTH * laneNo;
+}
+
 #endif  // HELPERS_H
