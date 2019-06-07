@@ -14,6 +14,40 @@ using nlohmann::json;
 using std::string;
 using std::vector;
 
+enum LaneOccupancy { CLEAR, LEFT_LANE_OCCUPIED, RIGHT_LANE_OCCUPIED, CURR_LANE_OCCUPIED};
+
+LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& sensor_fusion, const int& prev_size, const double& car_s, const int& curr_vehicle_lane ){
+  LaneOccupancy laneState = CLEAR;
+  //Iterate the sensor fusion list in order to determine any other
+  //vehicle in our current lane
+  for(int i = 0; i < sensor_fusion.size(); ++i) {
+    //Get the other vehicle lane distance
+    float d = sensor_fusion[i][6];
+    //Check if this falls within our current vehicle distance
+    //with the assumption the road has only 3 lanes on each travelling side
+	int other_vehicle_lane = getLane(d);
+	//Get the other vehicle speed from its vectors
+    double vx = sensor_fusion[i][3];
+    double vy = sensor_fusion[i][4];
+              
+    //Get the magnitude of the velocity from the vectors
+    double other_vehicle_speed = sqrt(vx * vx + vy * vy);
+    double other_vehicle_s = sensor_fusion[i][5];
+	if(other_vehicle_lane == curr_vehicle_lane){
+      //Lets project the other vehicle distance s by using the previous point and other car speed converted to m/s.
+      //This will help us determine if our vehicle would be closer to other car then some evasive action
+      //needs to be taken.
+      other_vehicle_s += ((double)prev_size * .02 * other_vehicle_speed);
+      //If the project distance of the ahead vehicle is within 30m s then take evasive action.
+      if(other_vehicle_s > car_s &&((other_vehicle_s - car_s) < 30 )){
+        laneState = CURR_LANE_OCCUPIED;
+      }
+    }
+  }
+  return laneState;
+}
+
+
 int main() {
   uWS::Hub h;
 
@@ -51,11 +85,11 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  int starting_lane = 0;
+  int cur_vehicle_lane = 1;
   double ref_velocity = 0.0; //mph
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy,&starting_lane,&ref_velocity]
+               &map_waypoints_dx,&map_waypoints_dy,&cur_vehicle_lane,&ref_velocity]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -103,35 +137,9 @@ int main() {
               car_s = end_path_s;
           }
           
-          bool too_close = false;
-          //Iterate the sensor fusion list in order to determine any other
-          //vehicle in our current lane
-          for(int i = 0; i < sensor_fusion.size(); ++i) {
-            //Get the other vehicle lane distance
-            float d = sensor_fusion[i][6];
-            //Check if this falls within our current vehicle distance
-            //with the assumption the road has only 3 lanes on each travelling side
-            if( d < getLaneCenterDist(starting_lane + 1) && d > getLaneCenterDist(starting_lane) ) {
-              //Get the other vehicle speed from its vectors
-              double vx = sensor_fusion[i][3];
-              double vy = sensor_fusion[i][4];
-              
-              //Get the magnitude of the velocity from the vectors
-              double other_vehicle_speed = sqrt(vx * vx + vy * vy);
-              double other_vehicle_s = sensor_fusion[i][5];
-              
-              //Lets project the other vehicle distance s by using the previous point and other car speed converted to m/s.
-              //This will help us determine if our vehicle would be closer to other car then some evasive action
-              //needs to be taken.
-              other_vehicle_s += ((double)prev_size * .02 * other_vehicle_speed);
-              //If the project distance of the ahead vehicle is within 30m s then take evasive action.
-              if(other_vehicle_s > car_s &&((other_vehicle_s - car_s) < 30 )){
-                  too_close = true;
-              }
-            }
-          }
+          LaneOccupancy laneState = getOtherVehicleProximityState(sensor_fusion, prev_size, car_s, cur_vehicle_lane);
           
-          if(too_close){
+          if(laneState == CURR_LANE_OCCUPIED){
               ref_velocity -= .224;
           } else if (ref_velocity < 49.5) {
               ref_velocity += .224;
@@ -179,9 +187,9 @@ int main() {
 
           //Compute the next waypoints  30 m apart using frenet transform and get the x y coordinates
           //that correspond to the lane the vehicle would be traveling.
-          vector<double> next_wp0 = getXY(car_s+30,getLaneCenterDist(starting_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
-          vector<double> next_wp1 = getXY(car_s+60,getLaneCenterDist(starting_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
-          vector<double> next_wp2 = getXY(car_s+90,getLaneCenterDist(starting_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+          vector<double> next_wp0 = getXY(car_s+30,getLaneCenterDist(cur_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+          vector<double> next_wp1 = getXY(car_s+60,getLaneCenterDist(cur_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+          vector<double> next_wp2 = getXY(car_s+90,getLaneCenterDist(cur_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
 
           ptsx.push_back(next_wp0[0]);
           ptsx.push_back(next_wp1[0]);
