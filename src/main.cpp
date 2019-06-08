@@ -14,9 +14,24 @@ using nlohmann::json;
 using std::string;
 using std::vector;
 
-enum LaneOccupancy { CLEAR, LEFT_LANE_OCCUPIED, RIGHT_LANE_OCCUPIED, CURR_LANE_OCCUPIED};
+enum LaneOccupancy { CLEAR, LEFT_LANE_OCCUPIED, RIGHT_LANE_OCCUPIED, CURR_LANE_OCCUPIED };
 
-LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& sensor_fusion, const int& prev_size, const double& car_s, const int& curr_vehicle_lane ){
+enum CarLaneStatus { CAR_ON_CURR_LANE, CAR_ON_LEFT_LANE, CAR_ON_RIGHT_LANE, CAR_ON_NON_ADJ_LANE };
+
+CarLaneStatus getCarLaneStatus(const int& curr_vehicle_lane, const int& other_vehicle_lane){
+  int lane_diff = curr_vehicle_lane - other_vehicle_lane;
+  if(lane_diff == -1){
+    return CAR_ON_LEFT_LANE;
+  } else if( lane_diff == 1){
+	return CAR_ON_RIGHT_LANE;  
+  } else if( lane_diff == 0){
+	return CAR_ON_CURR_LANE; 
+  } else {
+	return CAR_ON_NON_ADJ_LANE;
+  }
+}
+
+LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& sensor_fusion, const int& prev_size, const double& car_s, const int& curr_vehicle_lane){
   LaneOccupancy laneState = CLEAR;
   //Iterate the sensor fusion list in order to determine any other
   //vehicle in our current lane
@@ -29,20 +44,25 @@ LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& senso
 	//Get the other vehicle speed from its vectors
     double vx = sensor_fusion[i][3];
     double vy = sensor_fusion[i][4];
-              
-    //Get the magnitude of the velocity from the vectors
-    double other_vehicle_speed = sqrt(vx * vx + vy * vy);
-    double other_vehicle_s = sensor_fusion[i][5];
-	if(other_vehicle_lane == curr_vehicle_lane){
-      //Lets project the other vehicle distance s by using the previous point and other car speed converted to m/s.
+	
+	CarLaneStatus otherCarLaneStatus = getCarLaneStatus(curr_vehicle_lane, other_vehicle_lane);
+
+	if( otherCarLaneStatus != CAR_ON_NON_ADJ_LANE) {
+	  //Get the magnitude of the velocity from the vectors
+      double other_vehicle_speed = sqrt(vx * vx + vy * vy);
+      double other_vehicle_s = sensor_fusion[i][5];
+      
+	  //Lets project the other vehicle distance s by using the previous point and other car speed converted to m/s.
       //This will help us determine if our vehicle would be closer to other car then some evasive action
       //needs to be taken.
       other_vehicle_s += ((double)prev_size * .02 * other_vehicle_speed);
       //If the project distance of the ahead vehicle is within 30m s then take evasive action.
       if(other_vehicle_s > car_s &&((other_vehicle_s - car_s) < 30 )){
-        laneState = CURR_LANE_OCCUPIED;
+		if(otherCarLaneStatus == CAR_ON_CURR_LANE){
+		  laneState = CURR_LANE_OCCUPIED;
+		}
       }
-    }
+	}
   }
   return laneState;
 }
