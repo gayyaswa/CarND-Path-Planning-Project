@@ -10,7 +10,7 @@
 #include "json.hpp"
 #include "spline.h"
 
-#define ENABLE_LOGGING false
+#define ENABLE_LOGGING true
 
 // for convenience
 using nlohmann::json;
@@ -255,10 +255,12 @@ int main() {
                                                                           FindVehicleStateByOccupiedLane(VehicleOccupancyState(RIGHT_LANE_OCCUPIED)));
               if( curr_vehicle_lane > 0 && leftLaneVehOccuIter == vehicleOccupancyStates.end()){
                   curr_vehicle_lane -= 1;
+				  ref_velocity -= .112;
               } else if( curr_vehicle_lane < 2 && rightLaneVehOccuIter == vehicleOccupancyStates.end()) {
                   curr_vehicle_lane += 1;
+				  ref_velocity -= .112;
               } else {
-                  ref_velocity -= .112;
+                  ref_velocity -= .224;
 #if ENABLE_LOGGING
                   std::cout<<"Velocity Decremented: "<< ref_velocity;
 #endif
