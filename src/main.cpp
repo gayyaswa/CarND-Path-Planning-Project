@@ -258,7 +258,7 @@ int main() {
               } else if( curr_vehicle_lane < 2 && rightLaneVehOccuIter == vehicleOccupancyStates.end()) {
                   curr_vehicle_lane += 1;
               } else {
-                  ref_velocity -= .224;
+                  ref_velocity -= .112;
 #if ENABLE_LOGGING
                   std::cout<<"Velocity Decremented: "<< ref_velocity;
 #endif
