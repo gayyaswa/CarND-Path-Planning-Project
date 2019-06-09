@@ -17,6 +17,174 @@ Each waypoint in the list contains  [x,y,s,dx,dy] values. x and y are the waypoi
 
 The highway's waypoints loop around so the frenet s value, distance along the road, goes from 0 to 6945.554.
 
+#### Reflection
+There are 2 main sections implemented in this project:
+1. Vehicle and Lane Occupancy state
+2. Trajectory generetation
+
+#### Vehicle and Lane Occupancey State
+The simulator provides the state of each vehicle through sensor fusion data. These data from sensor fusion lane center distance **d**, **vehicle_speed**, **vehicle_distance(s)** are used to determine **vehicle_lane**, **proximity to ego vehicle**, **is vehicle ahead or behind** of other vehiclle respectively. These following code identifies the **Vehicle Proximity State** and also **Lane Occupancy State**:
+
+```cpp
+enum LaneOccupancy { CLEAR, LEFT_LANE_OCCUPIED, RIGHT_LANE_OCCUPIED, CURR_LANE_OCCUPIED };
+
+enum CarLaneStatus { CAR_ON_CURR_LANE, CAR_ON_LEFT_LANE, CAR_ON_RIGHT_LANE, CAR_ON_NON_ADJ_LANE };
+
+struct VehicleOccupancyState{
+    double speed;
+    LaneOccupancy occupiedLane;
+    VehicleOccupancyState(){
+        speed = 0.0;
+        occupiedLane = CLEAR;
+    }
+    VehicleOccupancyState( LaneOccupancy laneOccupancy){
+      occupiedLane = laneOccupancy;
+    }
+    bool operator < (const VehicleOccupancyState& other) const
+    {
+      return occupiedLane - other.occupiedLane; 
+    }
+};
+```
+The above states `set<VehicleOccupancyState>` are populated by the `getOtherVehicleProximityStateconst vector<vector<double>>& sensor_fusion,...)` method refer in `src/main.cpp`. The state of the vehicle and lane occupancy would determine the vehicle next lane position. The following highlights some of the important logic in decision making:
+* The other vehicle is on the current lane `CURR_LANE_OCCUPIED` within 30m proximity and adjacent lanes are occupied as well then vehicle would start slowing down at **0.224 MPH** rate as discussed in Q & A video to prevent collision
+* Either of the adjacent lanes are not occupied then vehicle would navigate towards that lane by considering the farther left and right lanes
+* Finally the vehicle would accelerate in increment of **0.224 MPH** once the lane is avaiable and would reach the desired *49.5 MPH *
+
+Below is the code for decision making logic described above:
+
+```cpp
+std::set<VehicleOccupancyState>::iterator currLaneVehOccuIter = std::find_if(vehicleOccupancyStates.begin(), vehicleOccupancyStates.end(),
+                                                                          FindVehicleStateByOccupiedLane(VehicleOccupancyState(CURR_LANE_OCCUPIED)));
+if( currLaneVehOccuIter != vehicleOccupancyStates.end()){
+  std::set<VehicleOccupancyState>::iterator leftLaneVehOccuIter = std::find_if(vehicleOccupancyStates.begin(), vehicleOccupancyStates.end(),                                                                          
+                                            FindVehicleStateByOccupiedLane(VehicleOccupancyState(LEFT_LANE_OCCUPIED)));
+  std::set<VehicleOccupancyState>::iterator rightLaneVehOccuIter = std::find_if(vehicleOccupancyStates.begin(),   
+  vehicleOccupancyStates.end(),                                                                                                                                                      
+  FindVehicleStateByOccupiedLane(VehicleOccupancyState(RIGHT_LANE_OCCUPIED)));
+  if( curr_vehicle_lane > 0 && leftLaneVehOccuIter == vehicleOccupancyStates.end()){
+    curr_vehicle_lane -= 1;
+  } else if( curr_vehicle_lane < 2 && rightLaneVehOccuIter == vehicleOccupancyStates.end()) {
+    curr_vehicle_lane += 1;
+  } else {
+    ref_velocity -= .112;
+#if ENABLE_LOGGING
+    std::cout<<"Velocity Decremented: "<< ref_velocity;
+#endif
+  }
+} else if (ref_velocity < 49.5) {
+              ref_velocity += .224;
+#if ENABLE_LOGGING			  
+              std::cout<<"Velocity Incremented: "<< ref_velocity;
+#endif
+}
+```
+
+
+#### Trajectory generation
+The trajectory path was generated using spline as discussed in the QA video. The general idea is to pick the non-travelled points from the previously generated path use them as 3 anchor points 30m apart based on the desired lane to be travelled. Also the vehicle curret point and the point before is used then using the spline library Y points correspond to the X points are generated as well. The following code provide details of the trajectory generation:
+ ```cpp
+ //Initial state use the car position as reference
+ if(prev_size < 2) {
+   //draw a tangent from car reference to find the previous x and y
+   double prev_car_x = car_x - cos(car_yaw);
+   double prev_car_y = car_y - sin(car_yaw);
+
+   ptsx.push_back(prev_car_x);
+   ptsx.push_back(car_x);
+            
+   ptsy.push_back(prev_car_y);
+   ptsy.push_back(car_y);
+ } else {//find the prev x and y points from the previous vehicle path   
+   //Lets use previous vehicle position as new reference points
+   ref_x = previous_path_x[prev_size - 1];
+   ref_y = previous_path_y[prev_size - 1];
+            
+   double prev_ref_x = previous_path_x[prev_size - 2];
+   double prev_ref_y = previous_path_y[prev_size - 2];
+            
+   ref_yaw = atan2(ref_y - prev_ref_y, ref_x - prev_ref_x );
+            
+   //Lets add this tangential points to x and y list
+   ptsx.push_back(prev_ref_x);
+   ptsx.push_back(ref_x);
+            
+   ptsy.push_back(prev_ref_y);
+   ptsy.push_back(ref_y);
+ }
+ ```
+ The following code computes 30 m apartu x, y points using frenet and spline:
+ ```cpp
+  //Compute the next waypoints  30 m apart using frenet transform and get the x y coordinates
+  //that correspond to the lane the vehicle would be traveling.
+  vector<double> next_wp0 = getXY(car_s+30,getLaneCenterDist(curr_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+  vector<double> next_wp1 = getXY(car_s+60,getLaneCenterDist(curr_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+  vector<double> next_wp2 = getXY(car_s+90,getLaneCenterDist(curr_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+
+  ptsx.push_back(next_wp0[0]);
+  ptsx.push_back(next_wp1[0]);
+  ptsx.push_back(next_wp2[0]);
+
+  ptsy.push_back(next_wp0[1]);
+  ptsy.push_back(next_wp1[1]);
+  ptsy.push_back(next_wp2[1]);
+
+  for (int i = 0; i < ptsx.size(); i++ ){
+    //shift car reference angle to 0 degrees
+    double shift_x = ptsx[i]-ref_x;
+    double shift_y = ptsy[i]-ref_y;
+
+    ptsx[i] = (shift_x *cos(0-ref_yaw)-shift_y*sin(0-ref_yaw));
+    ptsy[i] = (shift_x *sin(0-ref_yaw)+shift_y*cos(0-ref_yaw));
+  }
+
+
+  tk::spline s;
+  s.set_points(ptsx,ptsy);
+
+  //Variable that would hold the actual points for path planner
+  vector<double> next_x_vals;
+  vector<double> next_y_vals;
+
+  //Lets add the points from previous which is still not travelled by the vehicle
+  for(int i = 0; i < previous_path_x.size(); i++) {
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+  }
+
+  //Lets define 30m horizon for the vehicle.
+  double target_x = 30.0;
+  double target_y = s(target_x);
+  double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
+            
+  double x_add_on = 0;
+
+  for (int i = 1; i <= 50-previous_path_x.size(); i++) {
+            
+    //Let's compute the points in order for the vehicle to travel at the desired speed
+    // Car visits each of those points .02s and car desire speed to m/s by 2.24  
+    // Distance over speed would give us the desired N points           
+    double N = (target_dist/(.02*ref_velocity/2.24));
+    double x_point = x_add_on+(target_x)/N;
+    double y_point = s(x_point);
+
+    x_add_on = x_point;
+
+    double x_ref = x_point;
+    double y_ref = y_point;
+
+    //rotate back to normal coordinates  
+    x_point = (x_ref *cos(ref_yaw)-y_ref*sin(ref_yaw));
+    y_point = (x_ref *sin(ref_yaw)+y_ref*cos(ref_yaw));
+
+    x_point += ref_x;
+    y_point += ref_y;
+
+    next_x_vals.push_back(x_point);
+    next_y_vals.push_back(y_point);
+  }
+ ```
+
 ## Basic Build Instructions
 
 1. Clone this repo.
