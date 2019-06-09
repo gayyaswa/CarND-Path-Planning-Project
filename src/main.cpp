@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <set>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "helpers.h"
@@ -13,10 +14,34 @@
 using nlohmann::json;
 using std::string;
 using std::vector;
+using std::set;
 
 enum LaneOccupancy { CLEAR, LEFT_LANE_OCCUPIED, RIGHT_LANE_OCCUPIED, CURR_LANE_OCCUPIED };
 
 enum CarLaneStatus { CAR_ON_CURR_LANE, CAR_ON_LEFT_LANE, CAR_ON_RIGHT_LANE, CAR_ON_NON_ADJ_LANE };
+
+struct VehicleOccupancyState{
+	double speed;
+	LaneOccupancy occupiedLane;
+	VehicleOccupancyState(){
+		speed = 0.0;
+		occupiedLane = CLEAR;
+	}
+	VehicleOccupancyState( LaneOccupancy laneOccupancy){
+	  occupiedLane = laneOccupancy;
+	}
+	bool operator < (const VehicleOccupancyState& other) const
+	{
+	  return occupiedLane - other.occupiedLane; 
+	}
+	bool operator()(const VehicleOccupancyState& other) const
+	{
+	  bool isEqual = occupiedLane == other.occupiedLane;
+	  std::cout<<"Printing operator '<' "<<std::endl;
+	  std::cout<<occupiedLane<<","<<other.occupiedLane<<","<<isEqual<<std::endl;
+	  return isEqual; 
+	}
+};
 
 CarLaneStatus getCarLaneStatus(const int& curr_vehicle_lane, const int& other_vehicle_lane){
   int lane_diff = curr_vehicle_lane - other_vehicle_lane;
@@ -31,8 +56,8 @@ CarLaneStatus getCarLaneStatus(const int& curr_vehicle_lane, const int& other_ve
   }
 }
 
-LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& sensor_fusion, const int& prev_size, const double& car_s, const int& curr_vehicle_lane){
-  LaneOccupancy laneState = CLEAR;
+void getOtherVehicleProximityState( const vector<vector<double>>& sensor_fusion, const int& prev_size, const double& car_s, const int& curr_vehicle_lane
+                                            , set<VehicleOccupancyState>& otherVehicleStates){
   //Iterate the sensor fusion list in order to determine any other
   //vehicle in our current lane
   for(int i = 0; i < sensor_fusion.size(); ++i) {
@@ -46,8 +71,9 @@ LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& senso
     double vy = sensor_fusion[i][4];
 	
 	CarLaneStatus otherCarLaneStatus = getCarLaneStatus(curr_vehicle_lane, other_vehicle_lane);
+	std::cout<<"GetCarLane:"<<d<<","<<curr_vehicle_lane<<","<<other_vehicle_lane<<std::endl;
 
-	if( otherCarLaneStatus != CAR_ON_NON_ADJ_LANE) {
+	if(otherCarLaneStatus != CAR_ON_NON_ADJ_LANE) {
 	  //Get the magnitude of the velocity from the vectors
       double other_vehicle_speed = sqrt(vx * vx + vy * vy);
       double other_vehicle_s = sensor_fusion[i][5];
@@ -57,14 +83,39 @@ LaneOccupancy getOtherVehicleProximityState( const vector<vector<double>>& senso
       //needs to be taken.
       other_vehicle_s += ((double)prev_size * .02 * other_vehicle_speed);
       //If the project distance of the ahead vehicle is within 30m s then take evasive action.
-      if(other_vehicle_s > car_s &&((other_vehicle_s - car_s) < 30 )){
-		if(otherCarLaneStatus == CAR_ON_CURR_LANE){
-		  laneState = CURR_LANE_OCCUPIED;
+	  bool is_vehicle_ahead = other_vehicle_s > car_s;
+	  double proximity_dist = 0.0;
+	  if(is_vehicle_ahead) {
+		proximity_dist = other_vehicle_s - car_s;
+	  } else {
+		proximity_dist = car_s - other_vehicle_s;
+	  }
+      
+	  VehicleOccupancyState otherVehicleState;
+	  otherVehicleState.speed = other_vehicle_speed;
+	  if(is_vehicle_ahead){
+		if( otherCarLaneStatus == CAR_ON_CURR_LANE && proximity_dist < 30 ){
+		  std::cout<<"Car on Current Lane"<<std::endl;
+		  otherVehicleState.occupiedLane = CURR_LANE_OCCUPIED;
+		  otherVehicleStates.insert(otherVehicleState);
+		} else if( otherCarLaneStatus == CAR_ON_LEFT_LANE && proximity_dist < 15 ){
+		  otherVehicleState.occupiedLane = LEFT_LANE_OCCUPIED;
+		  otherVehicleStates.insert(otherVehicleState);
+		} else if( otherCarLaneStatus == CAR_ON_RIGHT_LANE && proximity_dist < 15 ){
+		  otherVehicleState.occupiedLane = RIGHT_LANE_OCCUPIED;
+		  otherVehicleStates.insert(otherVehicleState);
 		}
-      }
+      } else if(otherCarLaneStatus != CAR_ON_NON_ADJ_LANE && otherCarLaneStatus != CAR_ON_CURR_LANE && proximity_dist < 15){
+		if(otherCarLaneStatus == CAR_ON_LEFT_LANE){
+		  otherVehicleState.occupiedLane = LEFT_LANE_OCCUPIED;
+		  otherVehicleStates.insert(otherVehicleState);
+		} else {
+		  otherVehicleState.occupiedLane = RIGHT_LANE_OCCUPIED;
+		  otherVehicleStates.insert(otherVehicleState);
+		}
+	  }
 	}
   }
-  return laneState;
 }
 
 
@@ -105,11 +156,11 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  int cur_vehicle_lane = 1;
+  int curr_vehicle_lane = 1;
   double ref_velocity = 0.0; //mph
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
-               &map_waypoints_dx,&map_waypoints_dy,&cur_vehicle_lane,&ref_velocity]
+               &map_waypoints_dx,&map_waypoints_dy,&curr_vehicle_lane,&ref_velocity]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -157,10 +208,25 @@ int main() {
               car_s = end_path_s;
           }
           
-          LaneOccupancy laneState = getOtherVehicleProximityState(sensor_fusion, prev_size, car_s, cur_vehicle_lane);
-          
-          if(laneState == CURR_LANE_OCCUPIED){
-              ref_velocity -= .224;
+		  std::cout<<"Before Vehicle Proximity State: "<< curr_vehicle_lane<<std::endl;
+		  set<VehicleOccupancyState> vehicleOccupancyStates;
+          getOtherVehicleProximityState(sensor_fusion, prev_size, car_s, curr_vehicle_lane, vehicleOccupancyStates); 
+		  std::cout<<"After Vehicle Proximity State: "<< curr_vehicle_lane<<std::endl;
+
+		  std::cout<<"Printing Vehicle Occupancy States"<<std::endl;
+          for(VehicleOccupancyState currState: vehicleOccupancyStates){
+			  std::cout<<"Occupancy State"<<currState.speed<<","<<currState.occupiedLane<<std::endl;
+		  }			  
+		  
+          if(vehicleOccupancyStates.find(VehicleOccupancyState(CURR_LANE_OCCUPIED)) != vehicleOccupancyStates.end()){
+			  std::cout<<"Occupied Lane Check passed"<<std::endl;
+			  if( curr_vehicle_lane > 0 && vehicleOccupancyStates.find(VehicleOccupancyState(LEFT_LANE_OCCUPIED)) == vehicleOccupancyStates.end()){
+				  curr_vehicle_lane -= 1;
+			  } else if( curr_vehicle_lane < 2 && vehicleOccupancyStates.find(VehicleOccupancyState(RIGHT_LANE_OCCUPIED)) == vehicleOccupancyStates.end()) {
+				  curr_vehicle_lane += 1;
+			  } else {
+				  ref_velocity -= .224;
+			  }
           } else if (ref_velocity < 49.5) {
               ref_velocity += .224;
           }
@@ -204,12 +270,14 @@ int main() {
             ptsy.push_back(prev_ref_y);
             ptsy.push_back(ref_y);
           }
+		  
+		  std::cout<<"Before trajectory generation : "<<curr_vehicle_lane<<std::endl;
 
           //Compute the next waypoints  30 m apart using frenet transform and get the x y coordinates
           //that correspond to the lane the vehicle would be traveling.
-          vector<double> next_wp0 = getXY(car_s+30,getLaneCenterDist(cur_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
-          vector<double> next_wp1 = getXY(car_s+60,getLaneCenterDist(cur_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
-          vector<double> next_wp2 = getXY(car_s+90,getLaneCenterDist(cur_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+          vector<double> next_wp0 = getXY(car_s+30,getLaneCenterDist(curr_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+          vector<double> next_wp1 = getXY(car_s+60,getLaneCenterDist(curr_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
+          vector<double> next_wp2 = getXY(car_s+90,getLaneCenterDist(curr_vehicle_lane),map_waypoints_s,map_waypoints_x,map_waypoints_y);
 
           ptsx.push_back(next_wp0[0]);
           ptsx.push_back(next_wp1[0]);
